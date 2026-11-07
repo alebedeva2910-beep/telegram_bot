@@ -1,83 +1,72 @@
 import requests
 from flask import Flask, request
 
-# =========================
+# ==========================
 # НАСТРОЙКИ (SETTINGS)
-# =========================
-TOKEN = "9159865735:AAEUGdp6SFXjOQ5aJ7guN02Gn_9N1wvRSb4"
+# ==========================
+TOKEN = "915986735:AAEUGdp6SFXjOQ5aj7gun02Gn_9N1wvRSb4"
 ADMIN_ID = 7793697237
-WEBHOOK_URL = f"https://ixxky.pythonanywhere.com/9159865735:AAEUGdp6SFXjOQ5aJ7guN02Gn_9N1wvRSb4"
-BASE_URL = f"https://api.telegram.org/bot9159865735:AAEUGdp6SFXjOQ5aJ7guN02Gn_9N1wvRSb4/"
+BASE_URL = f"https://api.telegram.org/bot915986735:AAEUGdp6SFXjOQ5aj7gun02Gn_9N1wvRSb4/"
 
 app = Flask(__name__)
 user_states = {}
 admin_reply_target = {}
 
-
 def api_request(method, data=None):
     url = BASE_URL + method
     try:
         if data:
-            r = requests.post(url, json=data, timeout=10)
+            response = requests.post(url, json=data)
         else:
-            r = requests.get(url, timeout=10)
-        return r.json()
+            response = requests.get(url)
+        return response.json()
     except Exception as e:
-        print(f"Ошибка API: {e}")
-        return {"ok": False, "error": str(e)}
+        print(f"API Error ({method}): {e}")
+        return None
 
-
-def send_message(chat_id, text, reply_markup=None, parse_mode=None):
+def send_message(chat_id, text, reply_markup=None):
     data = {"chat_id": chat_id, "text": text}
     if reply_markup:
         data["reply_markup"] = reply_markup
-    if parse_mode:
-        data["parse_mode"] = parse_mode
-    return api_request("sendMessage", data)
-
+    res = api_request("sendMessage", data)
+    return res
 
 def copy_message(chat_id, from_chat_id, message_id):
-    return api_request("copyMessage", {
+    data = {
         "chat_id": chat_id,
         "from_chat_id": from_chat_id,
         "message_id": message_id
-    })
+    }
+    return api_request("copyMessage", data)
 
-
+# Клавиатуры (Keyboards)
 main_menu = {
-    "keyboard": [[{"text": "Подать заявку"}], [{"text": "Подать жалобу"}]],
+    "keyboard": [
+        [{"text": "Подать заявку"}, {"text": "Подать жалобу"}]
+    ],
     "resize_keyboard": True
 }
 
 cancel_menu = {
-    "keyboard": [[{"text": "Отмена"}]],
+    "keyboard": [
+        [{"text": "Отмена"}]
+    ],
     "resize_keyboard": True
 }
 
-
-def admin_keyboard(user_id, is_application):
-    buttons = [[{"text": "✉️ Ответить лично", "callback_data": f"reply:{user_id}"}]]
-    if is_application:
-        buttons.append([{"text": "❌ Отклонить заявку", "callback_data": f"reject:{user_id}"}])
-    return {"inline_keyboard": buttons}
-
-
 def handle_message(message):
     chat_id = message["chat"]["id"]
-    user = message.get("from", {})
-    user_id = user.get("id")
-    username = f"@{user['username']}" if user.get("username") else "не указан"
     text = message.get("text", "")
-    message_id = message["message_id"]
-    state = user_states.get(user_id)
+    user_id = message["from"]["id"]
 
     if text == "/start":
         user_states.pop(user_id, None)
-        send_message(chat_id, "Добро пожаловать в Telegram-бот!\n\nПожалуйста, выберите необходимую команду:", reply_markup=main_menu)
+        send_message(chat_id, "Привет! Добро пожаловать в бота.", reply_markup=main_menu)
         return
 
-    if text in ["/cancel", "Отмена"]:
+    if text == "Отмена":
         user_states.pop(user_id, None)
+        admin_reply_target.pop(user_id, None)
         send_message(chat_id, "Текущая операция отменена.", reply_markup=main_menu)
         return
 
@@ -100,74 +89,78 @@ def handle_message(message):
             chat_id,
             "ПОДАЧА ЖАЛОБЫ\n\nЖалоба подаётся в свободной форме. Пожалуйста, изложите в одном сообщении "
             "ситуацию и укажите, что именно вы считаете неприемлемым.\n\n"
-            "Администрация рассмотрит обращение и при необходимости примет соответствующие меры.",
+            "Администрация рассмотрит обращение и примет соответствующие меры.",
             reply_markup=cancel_menu
         )
         return
 
+    state = user_states.get(user_id)
+
+    # Обработка ответа администратора
     if state == "admin_reply" and user_id == ADMIN_ID:
         target_id = admin_reply_target.get(ADMIN_ID)
-        res = copy_message(target_id, chat_id, message_id)
+        res = copy_message(target_id, chat_id, message["message_id"])
         if res and res.get("ok"):
-            send_message(chat_id, "✅ Ваше сообщение успешно отправлено пользователю.", reply_markup=main_menu)
+            send_message(ADMIN_ID, "Сообщение успешно отправлено пользователю!", reply_markup=main_menu)
         else:
-            send_message(chat_id, "Не удалось отправить сообщение.", reply_markup=main_menu)
+            send_message(ADMIN_ID, "Не удалось отправить сообщение пользователю.", reply_markup=main_menu)
         user_states.pop(user_id, None)
+        admin_reply_target.pop(user_id, None)
         return
 
+    # Обработка пользовательской заявки
     if state == "application":
-        send_message(
-            ADMIN_ID,
-            f"📩 <b>НОВАЯ ЗАЯВКА</b>\n\nПользователь: {username}\nTelegram ID: <code>{user_id}</code>",
-            reply_markup=admin_keyboard(user_id, True),
-            parse_mode="HTML"
-        )
-        copy_message(ADMIN_ID, chat_id, message_id)
-        send_message(chat_id, "Ваша заявка успешно принята и передана администрации. Пожалуйста, ожидайте ответа администратора.", reply_markup=main_menu)
         user_states.pop(user_id, None)
+        send_message(chat_id, "Ваша заявка успешно отправлена администрации!", reply_markup=main_menu)
+        
+        admin_keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Одобрить", "callback_data": f"approve:{user_id}"},
+                    {"text": "❌ Отклонить", "callback_data": f"reject:{user_id}"}
+                ]
+            ]
+        }
+        send_message(ADMIN_ID, f"Новая заявка от пользователя (ID: {user_id}):")
+        copy_message(ADMIN_ID, chat_id, message["message_id"])
+        send_message(ADMIN_ID, "Выберите действие:", reply_markup=admin_keyboard)
         return
 
+    # Обработка пользовательской жалобы
     if state == "complaint":
-        send_message(
-            ADMIN_ID,
-            f"⚠️ <b>НОВАЯ ЖАЛОБА</b>\n\nПользователь: {username}\nTelegram ID: <code>{user_id}</code>",
-            reply_markup=admin_keyboard(user_id, False),
-            parse_mode="HTML"
-        )
-        copy_message(ADMIN_ID, chat_id, message_id)
-        send_message(chat_id, "Ваша жалоба успешно принята и передана администрации. Благодарим за обращение.", reply_markup=main_menu)
         user_states.pop(user_id, None)
+        send_message(chat_id, "Ваша жалоба отправлена администрации.", reply_markup=main_menu)
+        
+        send_message(ADMIN_ID, f"Новая жалоба от пользователя (ID: {user_id}):")
+        copy_message(ADMIN_ID, chat_id, message["message_id"])
         return
 
+    send_message(chat_id, "Пожалуйста, используйте кнопки меню.", reply_markup=main_menu)
 
-def handle_callback(callback):
-    cb_id = callback["id"]
-    user_id = callback["from"]["id"]
-    data = callback.get("data", "")
-    message = callback.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
-    message_id = message.get("message_id")
+def handle_callback(callback_query):
+    data = callback_query["data"]
+    message = callback_query["message"]
+    chat_id = message["chat"]["id"]
+    message_id = message["message_id"]
+    cb_id = callback_query["id"]
 
-    if user_id != ADMIN_ID:
-        api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "У вас нет доступа.", "show_alert": True})
-        return
-
-    if data.startswith("reply:"):
+    if data.startswith("approve:"):
         target_id = int(data.split(":")[1])
-        admin_reply_target[ADMIN_ID] = target_id
-        user_states[ADMIN_ID] = "admin_reply"
-        send_message(chat_id, f"Введите сообщение для пользователя с ID {target_id}.\nДля отмены нажмите Отмена или /cancel.", reply_markup=cancel_menu)
-        api_request("answerCallbackQuery", {"callback_query_id": cb_id})
+        res = send_message(target_id, "Поздравляем! Ваша заявка одобрена администрацией.")
+        if res and res.get("ok"):
+            api_request("editMessageReplyMarkup", {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
+            api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Заявка одобрена."})
+        else:
+            api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Не удалось уведомить пользователя."})
 
     elif data.startswith("reject:"):
         target_id = int(data.split(":")[1])
-        res = send_message(target_id, "К сожалению, ваша заявка не была одобрена администрацией.\n\nБлагодарим за интерес к нашему сообществу.")
+        res = send_message(target_id, "К сожалению, ваша заявка не была одобрена администрацией.")
         if res and res.get("ok"):
             api_request("editMessageReplyMarkup", {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}})
             api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Заявка отклонена."})
         else:
-            api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Не удалось уведомить пользователя.", "show_alert": True})
-
+            api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Не удалось уведомить пользователя."})
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
@@ -178,7 +171,6 @@ def webhook():
         elif "callback_query" in update:
             handle_callback(update["callback_query"])
     return "OK", 200
-
 
 @app.route("/")
 def index():
