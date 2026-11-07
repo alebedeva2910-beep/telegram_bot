@@ -162,7 +162,7 @@ def handle_callback(callback_query):
         else:
             api_request("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Не удалось уведомить пользователя."})
 
-@app.route(f"/{TOKEN}", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
     update = request.get_json(silent=True)
     if update:
